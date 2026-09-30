@@ -165,7 +165,7 @@ Until `status` is `completed` (use the output URL) or `failed` (report the error
 | Video (default) | `seedance-2.5` | refs optional: ≤9 `image_urls`, cite as `@Image1` |
 | Video | `grok-i2v` | image-to-video, needs `reference_image_urls` |
 
-Use the defaults unless the user asks otherwise. With reference images (product photo, logo): use `<model>/edit` in the run request only — never store `/edit` in node data.
+Use the defaults unless the user asks otherwise, or a reference file you're following specifies a model (e.g. `references/character-consistency.md`). With reference images (product photo, logo): use `<model>/edit` in the run request only — never store `/edit` in node data.
 
 ## Demo 1 — one UGC shot
 

@@ -6,9 +6,10 @@ They come from the Kate reference board (`ugc-reference-board.json`).
 **Lock the look in images, not in video.** Every shot is decided as a still first.
 The video model only animates stills; it never invents a character.
 
-1. **Build a character sheet first.** One image generator (`gpt-image`, quality `high`)
+1. **Build a character sheet first, with `gpt-image` (quality `high`).** One image generator
    combines the face, outfit, and signature props (e.g. helmet, bag) into a front + side
-   full-body sheet. Every later shot of that character references this sheet.
+   full-body sheet. Every later shot of that character references this sheet. Use
+   `gpt-image` (high) for the keyframes too; it holds multiple references better here.
 
 2. **Name every reference node.** Give each upload and key generator a short, unique name
    (`MUM`, `SON`, `PRODUCT`, `FARM1`). Reuse the same reference nodes across shots; never
