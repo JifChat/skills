@@ -139,7 +139,7 @@ One rule, not a menu. `seedance-2.0-i2v` and `kling-v3` in `references/ugc-refer
 - End still (`lastframe-in`): model id `seedance-2.5-i2v`. Start still is `image_url` (the image on `image-in-0`). End still is `end_image_url`. The bare id `seedance-2.5` is reference-to-video and does not forward an end frame.
 - Several reference images and no end lock: `seedance-2.5`, with those images in `image_urls`. Cite them as `@Image1`, `@Image2`, … in the video node's `data.prompt` (`image-in-0` is `@Image1`).
 - Cheap default image: `nano-banana-pro`. `1K` / `2K` / `4K` is that model's `resolution` only.
-- `gpt-image` uses `quality` (`low`, `medium`, `high`) and size presets (`image_size`: `auto`, `square_hd`, `square`, `portrait_4_3`, `portrait_16_9`, `landscape_4_3`, `landscape_16_9`). It does not take 1K/2K/4K.
+- `gpt-image` uses `quality` (`low`, `medium`, `high`) and size presets (`image_size`: `auto`, `square_hd`, `square`, `portrait_4_3`, `portrait_16_9`, `landscape_4_3`, `landscape_16_9`). It does not take 1K/2K/4K. `references/character-consistency.md` overrides the cheap default for a repeated character: sheet and keyframes use `gpt-image` at quality `high`.
 - Image edit with reference stills: run model `${model}/edit` plus `image_urls`. Do not store `/edit` on the node.
 
 Quote cost from `GET /api/v1/canvas/models` for the model, duration, and resolution you will run. Read `GET /api/v1/canvas/balance` before a batch. Do not guess a price.
@@ -197,7 +197,7 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/check-run" \
 
 ### Multi-shot
 
-Do not clone all 180 nodes. Read `references/one-shot.md` for the one shot to copy.
+Same character, product, or location in 2+ shots: read `references/character-consistency.md` before building the graph. Do not clone all 180 nodes. Read `references/one-shot.md` for the one shot to copy.
 
 - One character still, reused on every shot (same upload, wired to each shot).
 - The same character description in every video prompt.
