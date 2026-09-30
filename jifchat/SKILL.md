@@ -78,7 +78,7 @@ Video (async — 202 + poll, see *Polling*):
 {"nodeId":"vid-1","model":"seedance-2.5","parameters":{"prompt":"...","duration":5,"aspect_ratio":"16:9","resolution":"720p"},"position":{"x":320,"y":100}}
 ```
 
-To animate a generated image, pass its `outputUrl` as a reference: `"image_urls":["<outputUrl>"], cite it in the prompt as `@Image1`.
+To animate a generated image, pass its `outputUrl` as a reference: `"image_urls":["<outputUrl>"]`, cite it in the prompt as `@Image1`.
 
 ### Path 2 — multi-node workflow: PUT the whole graph
 
