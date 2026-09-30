@@ -167,7 +167,7 @@ Use the defaults unless the user asks otherwise. With reference images (product 
 
 ## Demo 1 — one UGC shot
 
-Read `examples/one-shot.md`, and `examples/kate-canvas.json` when you need the graph. That export is the 180-node Kate canvas. **Do not clone all 180 nodes.**
+Read `examples/one-shot.md`, and `examples/ugc-reference-board.json` when you need the graph. That export is the 180-node UGC reference board. **Do not clone all 180 nodes.**
 
 Demo 1 builds a few nodes copied from **one** shot (Video Generator 1 in the example):
 
