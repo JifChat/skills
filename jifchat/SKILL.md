@@ -82,6 +82,8 @@ To animate a generated image, pass its `outputUrl` as a reference: `"image_urls"
 
 ### Path 2 — multi-node workflow: PUT the whole graph
 
+**Same character in 2+ shots?** Read `references/character-consistency.md` before building the graph.
+
 For 2+ generations (multi-scene videos, storyboard→video pipelines, avatar image + avatar video): **declare the entire node graph in ONE `PUT`**, then run the nodes. Do NOT issue per-node create calls; compose the structure once.
 
 ```bash
