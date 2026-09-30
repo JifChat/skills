@@ -11,8 +11,8 @@ JifChat is an AI design canvas. This skill lets you create canvas projects and r
 
 **Can**
 - Create new canvas projects and generate images / videos in them
-- Build complete multi-node canvas workflows (text prompts → image generators → video generators)
-- Put results on the canvas as properly connected, laid-out nodes that show up in the JifChat UI
+- Build multi-node canvas workflows (upload stills, image generators, video generators) and connect them with edges
+- Put results on the canvas as nodes the JifChat UI can show
 
 **Can't (yet)**
 - Touch projects shared with the user (owner-only; others return 404)
@@ -59,89 +59,97 @@ Then send `-H "Authorization: Bearer ***" -H 'Content-Type: application/json'` o
 
 ## The two paths — pick by job size
 
-**One generation?** → Path 1 (single run call — the API builds the node structure for you).
-**Two or more generations, or a pipeline?** → Path 2 (PUT the whole graph, then run).
+**One generation?** → Path 1 (single run call — the API creates the generator node for you).
+**Two or more generations, a pipeline, or upload nodes on the canvas?** → Path 2 (`POST` each node, then run).
+
+**Never build a canvas by `PUT /api/v1/canvas/projects/$PID` with `nodes`, and never send a whole-graph replace.** That PUT rejects any body that contains `nodes` — including `[]` and `null` — with 400, and it writes nothing in that body (no title, no edges). The only key-surface node write is `POST /api/v1/canvas/projects/$PID/nodes` (validated). There is no documented `POST /edges`. Edges, when you need them, go on that same PUT as `{ "edges": [...] }` with **no** `nodes` key. PUT is title and edges only.
 
 ### Path 1 — single generation
 
 ```bash
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-node" -H "Authorization: Bearer ***" \
   -H 'Content-Type: application/json' \
-  -d '{"nodeId":"img-1","model":"nano-banana-pro","parameters":{"prompt":"a shiba inu on a surfboard, watercolor"},"position":{"x":320,"y":100}}'
+  -d '{"nodeId":"img-1","model":"nano-banana-pro","parameters":{"prompt":"a shiba inu on a surfboard, watercolor"}}'
 ```
 
-- **Always send `position`** — never omit it. The API auto-creates the full structure: the `textNode` holding your prompt (placed 320px left of your position) + the edge + the generator. If a text node is already wired, its text is updated instead — never duplicated.
+- `run-node` creates the generator node when that `nodeId` is new. Do not PUT the project to add it.
+- Send the prompt in `parameters`. Do not send `status`, `resultImage`, `resultVideo`, `outputText`, `errorMessage`, or `uploadStatus` — the server seeds those.
 - Response: `{"success":true,"run":{"status":"completed","outputUrl":"https://...","creditCost":150}}`
 
 Video (async — 202 + poll, see *Polling*):
 ```json
-{"nodeId":"vid-1","model":"seedance-2.5","parameters":{"prompt":"...","duration":5,"aspect_ratio":"16:9","resolution":"720p"},"position":{"x":320,"y":100}}
+{"nodeId":"vid-1","model":"seedance-2.5","parameters":{"prompt":"...","duration":5,"aspect_ratio":"16:9","resolution":"720p"}}
 ```
 
 To animate a generated image, pass its `outputUrl` as a reference: `"image_urls":["<outputUrl>"]`, cite it in the prompt as `@Image1`.
 
-### Path 2 — multi-node workflow: PUT the whole graph
+### Path 2 — multi-node workflow: POST each node
 
-For 2+ generations (multi-scene videos, storyboard→video pipelines, avatar image + avatar video): **declare the entire node graph in ONE `PUT`**, then run the nodes. Do NOT issue per-node create calls; compose the structure once.
+For 2+ generations (multi-scene videos, storyboard→video pipelines, avatar image + avatar video) and for upload nodes: **create each node with its own `POST /nodes`**, then run. Do not declare the graph in one PUT.
 
 ```bash
-curl -s -X PUT "$B/api/v1/canvas/projects/$PID" -H "Authorization: Bearer ***" \
-  -H 'Content-Type: application/json' -d @- <<'EOF'
-{ ...full graph JSON — see worked example below... }
-EOF
+curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer ***" \
+  -H 'Content-Type: application/json' \
+  -d '{"nodeId":"scene1","nodeType":"imageGenerator","data":{"model":"nano-banana-pro","prompt":"scene 1: a dog discovers a surfboard on the beach, watercolor"}}'
 ```
 
-**⚠ The PUT replaces the ENTIRE nodes/edges arrays — anything you omit is DELETED.** On a fresh project (your default) the arrays are empty, so this is safe. If you must PUT into a project that already has content: GET it first, keep every existing node untouched, add only your new ones, send the complete arrays back.
+**Node body** — `nodeId` (non-empty string, ≤256 characters), `nodeType`, and `data`:
+- `nodeType` is one of `imageUpload`, `videoUpload`, `audioUpload`, `imageGenerator`, `textGenerator`, `videoGenerator`.
+- Existing nodes are never overwritten. A second POST with the same `nodeId` leaves the first node as it was. Change a prompt or duration on the **run** body, not by PUT.
+- Generator `data` may include `model`, `prompt` (a string; longer values are capped), `name`, and that type's settings (`resolution`, `aspectRatio`, `quality`, `imageSize`, `duration`, `generateAudio`). Unknown keys are dropped. The server seeds `status: "idle"` and the result fields. Do not send those yourself.
+- `data.prompt` on the node is what the canvas shows. The run does **not** read it — always send `parameters.prompt` (and duration, aspect, resolution) on `run-node` / `run-video-node`.
+- Upload nodes require an **https** Firebase Storage or fal media URL. `imageUpload` takes `data.imageUrl` (or `data.mediaUrl`). `videoUpload` and `audioUpload` take `data.mediaUrl`. Anything else is 400. `filename` and `mimeType` must be strings when sent; `duration` must be a non-negative number when sent.
 
-**Node shape** — every node needs `id`, `type`, `position` `{x,y}`, and type-specific `data`:
-- `textNode`: `{"text": "<the prompt>"}`
-- `imageGenerator`: `{"model": "nano-banana-pro", "status": "idle", "resultImage": null, "errorMessage": null, "prompt": ""}`
-- `videoGenerator`: `{"model": "seedance-2.5", "status": "idle", "resultVideo": null, "errorMessage": null, "prompt": ""}`
+**Edges** — only if the canvas should show connections. `PUT` replaces the **edges** array. On a fresh project that array is empty, so send the full list. If the project already has edges, GET first and send every edge you intend to keep. Never include a `nodes` key in that body. Do not send `"edges": []` unless you mean to clear every edge.
 
-**Edge shape** — every edge needs `id` (e.g. `"edge-1"`), `source`, `target`, `sourceHandle`, `targetHandle`, `type: "highlightable"`, `animated: false`, `style: {"stroke": "<color>"}`:
-- text: `text-out` → `text-in` (at most ONE text edge per generator), stroke `"var(--handle-text-lit)"`
-- images: `image-out` → `image-in-1`, `image-in-2`, … (one edge per slot), stroke `"var(--handle-image-lit)"`
+Edge shape — `id` (e.g. `"edge-1"`), `source`, `target`, `sourceHandle`, `targetHandle`, `type: "highlightable"`, `animated: false`, `style: {"stroke": "<color>"}`:
+- images: `image-out` → `image-in-1`, `image-in-2`, … (one edge per slot), stroke `"var(--handle-image-lit)"`. A shot's end still uses `lastframe-in` when it has one.
 
-**Layout formula — use it, don't improvise:** each generator occupies a column 450px apart; its textNode sits 320px left of it; rows 240px apart.
+`POST /nodes` does not take a position. Do not PUT nodes to lay the canvas out.
 
 **Worked example — 2 image scenes feeding a video:**
 
-```json
+```bash
+curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer ***" \
+  -H 'Content-Type: application/json' \
+  -d '{"nodeId":"scene1","nodeType":"imageGenerator","data":{"model":"nano-banana-pro","prompt":"scene 1: a dog discovers a surfboard on the beach, watercolor"}}'
+
+curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer ***" \
+  -H 'Content-Type: application/json' \
+  -d '{"nodeId":"scene2","nodeType":"imageGenerator","data":{"model":"nano-banana-pro","prompt":"scene 2: the dog rides a wave at sunset, watercolor"}}'
+
+curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer ***" \
+  -H 'Content-Type: application/json' \
+  -d '{"nodeId":"vid-1","nodeType":"videoGenerator","data":{"model":"seedance-2.5","prompt":"@Image1 discovers the wave, @Image2 rides it — 5s cinematic"}}'
+
+curl -s -X PUT "$B/api/v1/canvas/projects/$PID" -H "Authorization: Bearer ***" \
+  -H 'Content-Type: application/json' -d @- <<'EOF'
 {
-  "nodes": [
-    {"id": "scene1-prompt", "type": "textNode", "position": {"x": 0, "y": 100}, "data": {"text": "scene 1: a dog discovers a surfboard on the beach, watercolor"}},
-    {"id": "scene1", "type": "imageGenerator", "position": {"x": 320, "y": 100}, "data": {"model": "nano-banana-pro", "status": "idle", "resultImage": null, "errorMessage": null, "prompt": ""}},
-    {"id": "scene2-prompt", "type": "textNode", "position": {"x": 0, "y": 340}, "data": {"text": "scene 2: the dog rides a wave at sunset, watercolor"}},
-    {"id": "scene2", "type": "imageGenerator", "position": {"x": 320, "y": 340}, "data": {"model": "nano-banana-pro", "status": "idle", "resultImage": null, "errorMessage": null, "prompt": ""}},
-    {"id": "video-prompt", "type": "textNode", "position": {"x": 770, "y": 220}, "data": {"text": "@Image1 discovers the wave, @Image2 rides it — 5s cinematic"}},
-    {"id": "vid-1", "type": "videoGenerator", "position": {"x": 1090, "y": 220}, "data": {"model": "seedance-2.5", "status": "idle", "resultVideo": null, "errorMessage": null, "prompt": ""}}
-  ],
   "edges": [
-    {"id": "edge-1", "source": "scene1-prompt", "sourceHandle": "text-out", "target": "scene1", "targetHandle": "text-in", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-text-lit)"}},
-    {"id": "edge-2", "source": "scene2-prompt", "sourceHandle": "text-out", "target": "scene2", "targetHandle": "text-in", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-text-lit)"}},
-    {"id": "edge-3", "source": "video-prompt", "sourceHandle": "text-out", "target": "vid-1", "targetHandle": "text-in", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-text-lit)"}},
-    {"id": "edge-4", "source": "scene1", "sourceHandle": "image-out", "target": "vid-1", "targetHandle": "image-in-1", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-image-lit)"}},
-    {"id": "edge-5", "source": "scene2", "sourceHandle": "image-out", "target": "vid-1", "targetHandle": "image-in-2", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-image-lit)"}}
+    {"id": "edge-1", "source": "scene1", "sourceHandle": "image-out", "target": "vid-1", "targetHandle": "image-in-1", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-image-lit)"}},
+    {"id": "edge-2", "source": "scene2", "sourceHandle": "image-out", "target": "vid-1", "targetHandle": "image-in-2", "type": "highlightable", "animated": false, "style": {"stroke": "var(--handle-image-lit)"}}
   ]
 }
+EOF
 ```
 
-The video generator gets its own textNode for the directing prompt; the scene images feed its `image-in-1`/`image-in-2` slots; cite connected images in prompts as `@Image1`, `@Image2` in wiring order.
+Cite connected images in prompts as `@Image1`, `@Image2` in wiring order.
 
-**Then run the nodes** — same `nodeId` as in the graph, **omit `parameters.prompt`** (the prompt already lives on the canvas; re-sending it would overwrite your text node):
+**Then run the nodes** — same `nodeId`, and **send `parameters.prompt`** on the run (plus video duration / aspect / resolution). Do not PUT the node to store the prompt for the run:
 
 ```bash
 # images first (sync — result is in the response)
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-node" -H "Authorization: Bearer ***" \
-  -H 'Content-Type: application/json' -d '{"nodeId":"scene1","model":"nano-banana-pro","parameters":{}}'
+  -H 'Content-Type: application/json' \
+  -d '{"nodeId":"scene1","model":"nano-banana-pro","parameters":{"prompt":"scene 1: a dog discovers a surfboard on the beach, watercolor"}}'
 
-# then the video (async — poll)
+# then the video (async — poll). Pass the scene output URLs as image_urls.
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-video-node" -H "Authorization: Bearer ***" \
   -H 'Content-Type: application/json' \
-  -d '{"nodeId":"vid-1","model":"seedance-2.5","parameters":{"duration":5,"aspect_ratio":"16:9","resolution":"720p"}}'
+  -d '{"nodeId":"vid-1","model":"seedance-2.5","parameters":{"prompt":"@Image1 discovers the wave, @Image2 rides it — 5s cinematic","image_urls":["<scene1 outputUrl>","<scene2 outputUrl>"],"duration":5,"aspect_ratio":"16:9","resolution":"720p"}}'
 ```
 
-Run nodes in dependency order (upstream first); each run spends credits only on success.
+Run nodes in dependency order (upstream first); each run spends credits only on success. Read `outputUrl` from the run response. Do not write it back onto the node.
 
 ## Polling (video only)
 
@@ -169,48 +177,37 @@ Use the defaults unless the user asks otherwise. With reference images (product 
 
 Read `references/one-shot.md`, and `references/ugc-reference-board.json` when you need the graph. That export is the 180-node UGC reference board. **Do not clone all 180 nodes.**
 
-Demo 1 builds a few nodes copied from **one** shot (Video Generator 1 in the example):
+Demo 1 copies **one** shot (Video Generator 1 in the example) and creates only those nodes, each with `POST /projects/:id/nodes`:
 
 - a product image upload
 - reference stills (image uploads)
 - an optional image-generator keyframe, only when a still has to be generated
-- one text node (the directing prompt)
-- one Seedance video node
+- one Seedance video node. The directing prompt lives on that node as `data.prompt` (see `references/one-shot.md`) — do not add a separate text node, and do not PUT a graph to place it
 
-Use Path 2 for that small graph. Follow the layout formula. Wire each upload `image-out` → `image-in-1`, `image-in-2`, … in order, and an end still to `lastframe-in` when the shot has one. Wire the text node `text-out` → `text-in`. Cite stills in the prompt as `@Image1`, `@Image2` in wiring order. Write the prompt as one continuous shot, in the spirit of `references/one-shot.md`. For Seedance wording, see the prompt guide linked from the repo README.
+Use Path 2 for that small set of nodes. Wire uploads with a PUT of **edges only** (no `nodes` key): each upload `image-out` → `image-in-1`, `image-in-2`, … in order, and an end still to `lastframe-in` when the shot has one. Video Generator 1 uses `image-in-0` for the start still and `lastframe-in` for the end still. Cite stills in the prompt as `@Image1`, `@Image2` in wiring order. Write the prompt as one continuous shot, in the spirit of `references/one-shot.md`. For Seedance wording, see the prompt guide linked from the repo README.
 
-URL fields in the example JSON are the placeholder `{{user-upload}}`. They are not fetchable. Put the user's real image URLs on the upload nodes.
+URL fields in the example JSON are the placeholder `{{user-upload}}`. They are not fetchable. Put the user's real image URLs on the upload nodes. Those URLs must be https Firebase Storage or fal media URLs — `POST /nodes` rejects anything else. Do not work around that by PUTting `nodes`.
 
-**Explicit “make a similar UGC video” runs.** When the user says “make a similar UGC video”, that sentence is the go-ahead: create a fresh project, PUT this one-shot graph, and run it (keyframe first if you added one, then the Seedance video). Do not stop after describing the graph, and do not ask for a second confirmation.
+**Explicit “make a similar UGC video” runs.** When the user says “make a similar UGC video”, that sentence is the go-ahead: create a fresh project, POST this one-shot's nodes (not the whole board), PUT edges with no `nodes` key, and run it (keyframe first if you added one, then the Seedance video). Do not stop after describing the graph, and do not ask for a second confirmation.
 
-**“Make it slower” edits that video node.** Stay in the project that holds the shot. Raise the duration on that Seedance video node (adjust the prompt's timing beats only if they would no longer match), PUT the graph, and re-run **that** node. Do not create a new project, do not add a second video node, and do not clone the canvas.
+**“Make it slower” edits that video node.** Stay in the project that holds the shot. Re-run **that** Seedance node with a higher `parameters.duration` (adjust `parameters.prompt` timing beats only if they would no longer match). `POST /nodes` will not overwrite the existing node, and PUT must not carry `nodes`. Do not create a new project, do not add a second video node, and do not clone the canvas.
 
 **Template-name jobs still ask permission.** If the user names a template, or asks to run a job by template name, say what you are about to run and wait for a yes. A template name is not permission to spend credits.
 
 ## Rules
 
 - **Fresh project per request** — see the Project rule.
-- **Always send `position`** — Path 1 single node, Path 2 layout formula.
+- **Node writes are `POST /projects/:id/nodes` only.** Never PUT a body that contains `nodes`. PUT is title and edges. The server seeds `status`, `resultImage`, `resultVideo`, `outputText`, `errorMessage`, and `uploadStatus` — do not write them.
 - **Brands:** never generate brand content from text alone — models don't know real logos/colors. Ask for 2–4 reference image URLs (logo, palette, product) and use an `/edit` model.
 - **Credits:** each run spends the user's credits, charged on success (image ≈150 on nano-banana-pro). Before a batch (>3 runs) or any video, say what you're about to run and get a yes. An explicit “make a similar UGC video” or “make it slower” is that yes (see Demo 1). A template name is not.
 - **One run per node at a time** — 409 means that node is still running; wait or use a new `nodeId`.
 - **Never send an empty array** for an image param (`[]` → 422) — omit the param instead.
 
-## Sync result to canvas (temporary)
-
-Today a successful run does **not** update the node's status on the canvas (it stays `idle` with no image) — structure and positions are handled for you. Until the status write-back lands, after each completed run:
-
-1. `GET $B/api/v1/canvas/projects/$PID` → take `nodes` and `edges`.
-2. On the node you ran, set `data.status = "completed"` and `data.resultImage = <outputUrl>` (videos: `data.resultVideo`).
-3. `PUT $B/api/v1/canvas/projects/$PID` with `{"nodes": [...], "edges": [...]}` — **all** nodes and edges, unchanged except that one node.
-
-Skip this step if the user has the project open and is editing it — `PUT` replaces the whole node list.
-
 ## Errors
 
 | Status | Meaning | Do |
 |---|---|---|
-| 400 | invalid request (bad model id, bad handle, missing field) | read the error message — it names the problem; fix and retry once |
+| 400 | invalid request (bad model id, bad handle, missing field), or a PUT body that contains `nodes` | read the error message — it names the problem; fix and retry once. For `nodes` on PUT, use `POST /projects/:id/nodes` instead. That rejected PUT saved nothing |
 | 401 | missing/invalid key | re-check Setup and `JIFCHAT_BASE_URL` |
 | 402 | out of credits | tell the user to top up in Settings → Balance |
 | 404 | project/node missing or not theirs | you probably used a wrong `$PID` — re-check the create-project response |
