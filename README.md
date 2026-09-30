@@ -6,7 +6,7 @@ Seedance 2.5 prompt guide: https://docs.volcengine.com/docs/ark/seedance-2-5-pro
 
 ## Install
 
-Copy `SKILL.md` and the `examples/` directory together into a folder named `jifchat`. The skill reads `examples/one-shot.md` and `examples/kate-canvas.json`, so those files have to sit next to `SKILL.md`.
+Copy `SKILL.md` and the `examples/` directory together into a folder named `jifchat`. The skill reads `examples/one-shot.md` and `examples/ugc-reference-board.json`, so those files have to sit next to `SKILL.md`.
 
 ### Cursor
 
@@ -60,5 +60,5 @@ Open a new session after copying so the agent picks up the skill.
 
 ## Examples
 
-- `examples/one-shot.md` — the continuous Seedance image-to-video shot Demo 1 copies.
-- `examples/kate-canvas.json` — sanitized Kate canvas. Every media URL field is `{{user-upload}}`.
+- `examples/one-shot.md` — the continuous Seedance image-to-video shot Demo 1 copies. Copy that one shot, not all 180 nodes.
+- `examples/ugc-reference-board.json` — sanitized UGC reference board. Every media URL field is `{{user-upload}}`.

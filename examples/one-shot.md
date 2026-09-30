@@ -1,6 +1,6 @@
 # One shot
 
-Video Generator 1 on the ugc-reference-board (`examples/ugc-reference-board.json`). It is a Seedance image-to-video clip: uploaded stills in, one continuous shot out.
+Video Generator 1 on the ugc-reference-board (`examples/ugc-reference-board.json`). It is a Seedance image-to-video clip: uploaded stills in, one continuous shot out. Copy this one shot, not all 180 nodes.
 
 |            |                                        |
 | ---------- | -------------------------------------- |
