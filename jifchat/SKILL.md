@@ -37,6 +37,8 @@ Templates are not available.
 
 ## Calling the API
 
+Call the API with curl. A bare Python client gets Cloudflare 1010.
+
 Start every shell session with:
 
 ```bash
@@ -70,7 +72,7 @@ Production mounts the canvas key routes under `/api/v1/canvas`. Use these; do no
 
 `PUT /projects/:id` updates the title and other project fields. A body that contains `nodes` is a 400, and nothing in that body is written. Build the graph with `POST /nodes` and `POST /edges`.
 
-`position` is optional on `POST /nodes` and on the run routes. If it is omitted the server places the node (next horizontal slot, 450px pitch, `y` = 0). **Always send `position` anyway.**
+`position` is optional on `POST /nodes` and on the run routes. If it is omitted the server places the node at the previous node's x + that node's layout width + 200, same y. Widths: `textNode` 320, `imageUpload` 320, `videoUpload` 320, `audioUpload` 345, generators 736. A measured 9:16 video card is about 720×1280, so the next shot row is `y += 1480` (measured, not a layout constant). **Always send `position` anyway.** Explicit positions keep a 200px gap (text at 0, generator at 520).
 
 ## Uploads
 
@@ -84,11 +86,11 @@ curl -s -X POST "$B/api/v1/canvas/files/images" \
   -F "height=1672"
 ```
 
-201 returns `{ success, url, filepath, filename, type }`. Put that `url` on an upload node (`imageUpload` uses `data.imageUrl` or `data.mediaUrl`; `videoUpload` and `audioUpload` use `data.mediaUrl`). The stored URL must be https Firebase Storage or fal media. Anything else is 400.
+201 returns `{ success, url, filepath, filename, type }`. Put that `url` on an upload node (`imageUpload` uses `data.imageUrl` or `data.mediaUrl`; `videoUpload` and `audioUpload` use `data.mediaUrl`). The stored URL must be https Firebase Storage or fal media. Anything else is 400. Upload URLs can be reused on a new project.
 
 Checks, each a 400: kind, then `file_id` (a UUID if you send one; omit it and one is generated), then mime, then size, then width and height for images. Images: jpeg, gif, png, webp, up to 30 MB (HEIC/HEIF is rejected). Videos: mp4, quicktime, webm, x-m4v, ogg, up to 200 MB. Audio: mpeg, mp3, wav, x-wav, ogg, webm, aac, flac, mp4, up to 15 MB. An image whose bytes cannot be decoded is 400 and nothing is stored. A third upload while two are in flight is 429. Videos or audio on a file strategy with no upload handler is 501.
 
-If the upload fails, ask the user to upload on the canvas or pass an https Firebase or fal URL. Do not invent a host or a URL.
+If `POST /files/audio` is 400 or 501, upload that file with `POST /files/videos` and place the URL on an `audioUpload` node (`audio-out` → `audio-in-0`). Audio alone is not a Seedance reference. If the upload still fails, ask the user to upload on the canvas or pass an https Firebase or fal URL. Do not invent a host or a URL.
 
 ## Nodes, edges, layout
 
@@ -108,7 +110,7 @@ Handles are 0-based.
 - End still: `image-out` → `lastframe-in` (video generators only)
 - Reference clips on reference-to-video: `video-out` → `video-in-0` .. `video-in-2`, `audio-out` → `audio-in-0` .. `audio-in-2`
 
-**Layout.** Gap is 200. Next `x` = previous card width + 200. Widths from the frontend `NODE_LAYOUT_SIZE`: text 320, upload 320, generator 736 (audio upload cards are 345 wide). A 9:16 video card measured 720×1280, so the next shot row is `y += 1480`.
+**Layout.** Gap is 200. Next `x` = previous card width + 200. Widths: `textNode` 320, `imageUpload` 320, `videoUpload` 320, `audioUpload` 345, generators 736. A measured 9:16 video card is about 720×1280, so the next shot row is `y += 1480` (measured, not a layout constant). Explicit positions in the examples keep a 200px gap (text at 0, generator at 520).
 
 ```bash
 post_node() { curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d "$1"; }
@@ -130,7 +132,7 @@ post_edge '{"source":"start","sourceHandle":"image-out","target":"vid-1","target
 post_edge '{"source":"end","sourceHandle":"image-out","target":"vid-1","targetHandle":"lastframe-in"}'
 ```
 
-Run calls send `parameters` to the model. They do not read `data.prompt`. Provider keys are snake_case (`aspect_ratio`, `image_url`, `end_image_url`, `image_urls`, `image_size`). A `parameters.prompt` on `run-node` / `run-video-node` also creates or updates the upstream text node (it will not add a second text edge). For video, still put `@Image1` in `data.prompt`; copying `@` onto the text node does nothing.
+Write image prompts on the text node and video prompts on `data.prompt` before `run-*`. Never send a probe `parameters.prompt` at a node whose text you still need. Run calls send `parameters` to the model. They do not read `data.prompt`. Provider keys are snake_case (`aspect_ratio`, `image_url`, `end_image_url`, `image_urls`, `image_size`). A `parameters.prompt` on `run-node` / `run-video-node` also creates or updates the upstream text node (it will not add a second text edge). For video, still put `@Image1` in `data.prompt`; copying `@` onto the text node does nothing.
 
 ## Models
 
@@ -142,7 +144,7 @@ One rule, not a menu. `seedance-2.0-i2v` and `kling-v3` in `references/ugc-refer
 - `gpt-image` uses `quality` (`low`, `medium`, `high`) and size presets (`image_size`: `auto`, `square_hd`, `square`, `portrait_4_3`, `portrait_16_9`, `landscape_4_3`, `landscape_16_9`). It does not take 1K/2K/4K. `references/character-consistency.md` overrides the cheap default for a repeated character: sheet and keyframes use `gpt-image` at quality `high`.
 - Image edit with reference stills: run model `${model}/edit` plus `image_urls`. Do not store `/edit` on the node.
 
-Quote cost from `GET /api/v1/canvas/models` for the model, duration, and resolution you will run. Read `GET /api/v1/canvas/balance` before a batch. Do not guess a price.
+Quote cost from `GET /api/v1/canvas/models`. If `models` has an entry for the model, use that table with duration and resolution. If `models` is empty, quote the flat `imageCreditCost` or `videoCreditCost` on that same response (a video quote is that flat amount, not a per-second rate). Snapshot `GET /balance` before and after every run. A failed Seedance run with `creditCost: 0` is an unverified charge. Do not guess a price.
 
 ```bash
 curl -s "$B/api/v1/canvas/models" -H "Authorization: Bearer $K"
@@ -182,7 +184,7 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-video-node" \
   -d '{"nodeId":"vid-1","model":"seedance-2.5-i2v","parameters":{"prompt":"<same directing line as data.prompt>","image_url":"<start url>","end_image_url":"<end url>","duration":5,"aspect_ratio":"9:16","resolution":"720p"}}'
 ```
 
-- **Poll** `check-run` about every 10 seconds. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. If 5 runs are already in flight, queue — do not start a sixth until one finishes.
+- **Poll** `check-run` about every 10 seconds. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. At most 3 video runs in flight. On the error `Too many concurrent canvas runs`, wait. Do not change the server cap.
 
 ```bash
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/check-run" \
@@ -204,6 +206,7 @@ Same character, product, or location in 2+ shots: read `references/character-con
 - The spoken line on that video node's `data.prompt`.
 - Run shot 1 and wait before the rest.
 - Do not run a video on a keyframe that already looks wrong.
+- After a multi-shot stitch, `POST /files/videos` and add a `videoUpload` node, then send the canvas link.
 
 ## Demo 1 — one UGC shot
 
@@ -221,6 +224,9 @@ A new run of that shot uses `seedance-2.5-i2v` so the end still is kept. Wire `i
 | 404 | project or node missing, or not theirs | re-check `$PID` |
 | 409 | node already running, or edge slot taken | wait, or use a new `nodeId` / slot |
 | 429 | rate limited, or too many uploads in flight (default 2) | wait, retry once |
-| 501 | videos/audio upload not supported by the active file strategy | ask the user to upload on the canvas or pass an https Firebase or fal URL |
+| 501 | videos/audio upload not supported by the active file strategy | for audio, `POST /files/videos` and place the URL on an `audioUpload` node; otherwise ask the user to upload on the canvas or pass an https Firebase or fal URL |
+| 524 | gateway timeout on a run | do not re-run that `nodeId`. Read `runs[].outputUrl` from `GET /projects/:id` |
+
+`Invalid file source` or `fetch failed`: retry the same payload up to 3 times before changing files or the project.
 
 An error reply includes the canvas link. Full spec: `$B/api/openapi.json`.
