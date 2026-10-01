@@ -184,13 +184,22 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-video-node" \
   -d '{"nodeId":"vid-1","model":"seedance-2.5-i2v","parameters":{"prompt":"<same directing line as data.prompt>","image_url":"<start url>","end_image_url":"<end url>","duration":5,"aspect_ratio":"9:16","resolution":"720p"}}'
 ```
 
-- **Poll** `check-run` about every 10 seconds. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. At most 3 video runs in flight. On the error `Too many concurrent canvas runs`, wait. Do not change the server cap.
+- **Poll** `GET /projects/:id` about every 10–15 seconds and read the run whose `responseUrl` matches. Do not poll `check-run`: while a finished video is being saved, a `check-run` call starts a second poller that marks the run `failed` (`Invalid file source`) even though the video was made and charged. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. At most 3 video runs in flight. On the error `Too many concurrent canvas runs`, wait. Do not change the server cap.
+
+```bash
+curl -s "$B/api/v1/canvas/projects/$PID" -H "Authorization: Bearer $K" \
+  | jq '.runs[] | select(.responseUrl=="<run.responseUrl>") | {status, outputUrl, creditCost, errorMessage}'
+```
+
+- Call `check-run` only to recover a run still `running` after about 10 minutes (server restart). Call it once, not in a loop.
 
 ```bash
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/check-run" \
   -H "Authorization: Bearer $K" -H 'Content-Type: application/json' \
   -d '{"responseUrl":"<run.responseUrl>"}'
 ```
+
+- While videos are running, ask the user to close this project's canvas tab. The canvas also calls `check-run` and can trigger the same false failure.
 
 - **Finished:** send the file in chat and the canvas link.
 - **Error:** the reply includes the canvas link.
@@ -227,6 +236,8 @@ A new run of that shot uses `seedance-2.5-i2v` so the end still is kept. Wire `i
 | 501 | videos/audio upload not supported by the active file strategy | for audio, `POST /files/videos` and place the URL on an `audioUpload` node; otherwise ask the user to upload on the canvas or pass an https Firebase or fal URL |
 | 524 | gateway timeout on a run | do not re-run that `nodeId`. Read `runs[].outputUrl` from `GET /projects/:id` |
 
-`Invalid file source` or `fetch failed`: retry the same payload up to 3 times before changing files or the project.
+`Invalid file source` on a video run is usually a false failure: the video was generated and charged, but the run was marked `failed` while saving. Do not retry right away. Compare `GET /balance` with the snapshot from before the run. If it dropped by the run cost, tell the user the video was likely saved to their JifChat files (file name contains `canvas_<nodeId>_`) and ask before re-running. If the balance did not drop, retry the same payload once.
+
+`fetch failed`: retry the same payload up to 3 times before changing files or the project.
 
 An error reply includes the canvas link. Full spec: `$B/api/openapi.json`.
