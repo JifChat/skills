@@ -39,3 +39,20 @@ The video model only animates stills; it never invents a character.
    exact visual reference for the characters, clothing, props, and environment. Maintain
    continuity with the previous shot. One continuous shot, no cuts." Then write the
    action as timed beats (0–2s, 2–4s, …).
+
+9. **Continuous take.** Shot 1 is a keyframe, then `seedance-2.5-i2v`. Shot n+1 uses shot n's
+   last frame as `image-in-0` (`image_url`). An end pose uses `lastframe-in`
+   (`end_image_url`). Bare `seedance-2.5` does not treat `@Image1` as the first frame.
+
+10. **Voice stays Seedance's own audio** (`generate_audio`). One verbatim voice line in every
+    shot's `data.prompt`. Reuse shot 1 as a voice reference on `seedance-2.5` when the model
+    can take `video_urls`. Do not mix a separate TTS track onto the picture (lips will not
+    match). `seedance-2.5-i2v` cannot also take that voice reference: pose lock is i2v; a
+    shared voice reference is `seedance-2.5`.
+
+11. **Check the line.** Check a transcript (or ask the user) for digits, Latin, and extra
+    words. If a line is wrong, re-run that shot with a shorter line and keep `generate_audio`.
+
+12. **Prep the frames.** Do not upload frames that still show the original person. Modest
+    wardrobe before any video. Read the reference script from audio or burned-in captions.
+    Flip selfie product crops and crop captions out.

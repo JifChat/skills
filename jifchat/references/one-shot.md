@@ -4,6 +4,8 @@ Video Generator 1 on the ugc-reference-board (`ugc-reference-board.json`, beside
 
 The reference shot used `seedance-2.0-i2v` and an end still on `lastframe-in`. A new run uses `seedance-2.5-i2v` so the end still is kept (`end_image_url`). `seedance-2.0-i2v` in the export is the old model id, not the model to send.
 
+A new multi-shot run uses `seedance-2.5-i2v` for start and end stills.
+
 |            |                                        |
 | ---------- | -------------------------------------- |
 | Node       | `videoGenerator-ztbYay5SDl8FN7N8RGnSm` |
