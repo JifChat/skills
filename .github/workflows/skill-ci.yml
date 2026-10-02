@@ -93,6 +93,23 @@ jobs:
           )
           PY
 
+      # 2b. No internal hosts anywhere in this repo. It is public, and the docs
+      #     are served verbatim on docs sites and in installers. An internal
+      #     hostname here is an advertised target; a tester switches environments
+      #     with JIFCHAT_BASE_URL, which the skill documents, not by naming hosts.
+      - name: Reject internal hosts
+        run: |
+          fail=0
+          for f in $(git ls-files '*.md' '*.json'); do
+            hits=$(grep -nE 'staging\.jif\.dev|jif-testing|twz\.tw|localhost:[0-9]+|127\.0\.0\.1' "$f" || true)
+            if [ -n "$hits" ]; then
+              echo "$hits"
+              echo "::error file=$f::$f advertises an internal host; use the JIFCHAT_BASE_URL override instead"
+              fail=1
+            fi
+          done
+          exit $fail
+
       # 3. The skill must stay thin: behaviour in SKILL.md, live contract in
       #    openapi.json. A hardcoded endpoint table in the skill drifts from the
       #    server. Fail if SKILL.md grows a fenced API-schema block.
