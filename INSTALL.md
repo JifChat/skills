@@ -15,3 +15,9 @@ Copy the `jifchat/` folder into the agent skills directory, for example `~/.curs
 ```bash
 hermes skills install JifChat/skills
 ```
+
+For a named profile (not the default one):
+
+```bash
+hermes -p <profile> skills install JifChat/skills
+```

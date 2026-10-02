@@ -1,0 +1,160 @@
+name: Skill guard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  guard:
+    name: skill guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. No redacted or literal tokens in served text.
+      #    Every Authorization example must use the $K variable. A copied
+      #    example that carries a redacted token sends 401 on the first call.
+      - name: Reject redacted or literal tokens
+        run: |
+          fail=0
+          for f in $(git ls-files '*.md' '*.json'); do
+            if grep -F 'Bearer ***' "$f"; then
+              echo "::error file=$f::$f contains a redacted Bearer token; use \$K"
+              fail=1
+            fi
+            # a literal jc_ key pasted into the repo (the placeholder jc_YOUR_KEY
+            # and the docs' jc_... ellipsis are both fine)
+            if grep -nE 'jc_[A-Za-z0-9_-]{16,}' "$f"; then
+              echo "::error file=$f::$f looks like it contains a real jc_ API key"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # 2. The reference board must stay valid JSON with the shape the skill
+      #    reads with jq (`.nodes[] | select(.id == $id)`), and must not leak a
+      #    real media URL. Sanitized uploads are the {{user-upload}} placeholder.
+      - name: Validate the reference board
+        run: |
+          python3 - <<'PY'
+          import json, sys, re
+
+          path = 'jifchat/references/ugc-reference-board.json'
+          with open(path) as fh:
+              board = json.load(fh)
+
+          for key in ('nodes', 'edges'):
+              if key not in board:
+                  sys.exit(f'{path}: missing top-level "{key}"')
+
+          if not board['nodes']:
+              sys.exit(f'{path}: no nodes')
+
+          bad = []
+          for node in board['nodes']:
+              if 'id' not in node or 'type' not in node:
+                  bad.append(node.get('id', '<no id>'))
+          if bad:
+              sys.exit(f'{path}: nodes missing id/type: {bad[:5]}')
+
+          # every field the one-shot jq recipe selects must exist on the node
+          # it names; a renamed node silently breaks the recipe.
+          shot = next(
+              (n for n in board['nodes']
+               if n.get('id') == 'videoGenerator-ztbYay5SDl8FN7N8RGnSm'),
+              None,
+          )
+          if shot is None:
+              sys.exit(f'{path}: the one-shot node referenced by one-shot.md is gone')
+
+          edges = [e for e in board['edges'] if e.get('target') == shot['id']]
+          if not edges:
+              sys.exit(f'{path}: the one-shot node has no incoming edges (one-shot.md)')
+
+          # no un-sanitized absolute media URL anywhere in the board
+          raw = open(path).read()
+          suspicious = re.findall(
+              r'https?://(?!web\.archive\.org)[^"\s]*\.(?:png|jpe?g|webp|mp4|mov|mp3|wav)',
+              raw,
+          )
+          if suspicious:
+              sys.exit(
+                  f'{path}: {len(suspicious)} un-sanitized media URL(s), '
+                  f'first: {suspicious[0][:80]}'
+              )
+
+          print(
+              f'board ok: {len(board["nodes"])} nodes, {len(board["edges"])} edges, '
+              f'one-shot node has {len(edges)} incoming edge(s)'
+          )
+          PY
+
+      # 2b. No internal hosts anywhere in this repo. It is public, and the docs
+      #     are served verbatim on docs sites and in installers. An internal
+      #     hostname here is an advertised target; a tester switches environments
+      #     with JIFCHAT_BASE_URL, which the skill documents, not by naming hosts.
+      - name: Reject internal hosts
+        run: |
+          fail=0
+          for f in $(git ls-files '*.md' '*.json'); do
+            hits=$(grep -nE 'staging\.jif\.dev|jif-testing|twz\.tw|localhost:[0-9]+|127\.0\.0\.1' "$f" || true)
+            if [ -n "$hits" ]; then
+              echo "$hits"
+              echo "::error file=$f::$f advertises an internal host; use the JIFCHAT_BASE_URL override instead"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      # 3. The skill must stay thin: behaviour in SKILL.md, live contract in
+      #    openapi.json. A hardcoded endpoint table in the skill drifts from the
+      #    server. Fail if SKILL.md grows a fenced API-schema block.
+      - name: Skill stays thin (no inlined API schemas)
+        run: |
+          f=jifchat/SKILL.md
+          if [ ! -f "$f" ]; then
+            echo "::error::$f is missing"
+            exit 1
+          fi
+          # every Authorization example uses $K
+          if grep -F 'Bearer $K' "$f" >/dev/null; then :; else
+            echo "::error file=$f::expected Authorization examples to use \$K"
+            exit 1
+          fi
+          # frontmatter must carry a name and a version
+          head -5 "$f" | grep -q '^name: jifchat' \
+            || { echo "::error file=$f::frontmatter is missing 'name: jifchat'"; exit 1; }
+          head -5 "$f" | grep -qE '^version: [0-9]+\.[0-9]+\.[0-9]+' \
+            || { echo "::error file=$f::frontmatter is missing a version"; exit 1; }
+
+      # 4. Drift guard (opt-in): this repo is the canonical copy of the skill.
+      #    Jif-Chat ships docs/agents/skill.md as a deploy-time copy of
+      #    jifchat/SKILL.md, synced at merge time — never hand-edited there.
+      #
+      #    The two are allowed to differ ONLY until the copy lands, and the
+      #    copy is refreshed by copying this file verbatim. So the guard is
+      #    "the copy must not contain anything this file does not": every
+      #    non-blank line of the copy must exist here. That catches a hand-edit
+      #    in the copy without false-failing while the copy is one revision
+      #    behind.
+      #
+      #    Off by default (needs a Jif-Chat checkout). Enable it in the Jif-Chat
+      #    repo, which has both files, by setting JIFCHAT_REPO=. there.
+      - name: Skill copy has not been hand-edited (opt-in)
+        if: ${{ env.JIFCHAT_COPY != '' }}
+        run: |
+          f="$JIFCHAT_COPY"
+          [ -f "$f" ] || { echo "::error::JIFCHAT_COPY=$f does not exist"; exit 1; }
+          missing=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if ! grep -Fqx -- "$line" jifchat/SKILL.md; then
+              echo "::error file=$f::line present in the copy but not in the canonical skill: $line"
+              missing=1
+            fi
+          done < "$f"
+          exit $missing
