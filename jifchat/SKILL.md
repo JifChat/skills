@@ -1,6 +1,6 @@
 ---
 name: jifchat
-version: 2.0.0
+version: 2.1.0
 description: Generate images and videos on the user's JifChat infinite canvas (jif.dev). Use when the user asks to generate, create, or render an image, product shot, poster, or short video with JifChat, or says "/jifchat", "/generate image", "/generate video", or "make a similar UGC video". Results land in a JifChat canvas project and spend the user's JifChat credits.
 ---
 
@@ -26,11 +26,11 @@ Templates are not available.
 ## Setup
 
 1. Sign in to JifChat → **Settings → Balance → API Keys** → **Create**. Copy the `jc_...` key — it is shown once.
-2. Save it where this skill can read it (either works):
+2. Save it where this skill can read it:
    ```bash
    install -m 600 /dev/null ~/.jifchat_key && printf '%s' 'jc_YOUR_KEY' > ~/.jifchat_key
    ```
-   or `export JIFCHAT_API_KEY=jc_YOUR_KEY` in your shell profile.
+   `~/.jifchat_key` is the only recommended location. Never patch that file with an edit tool — the diff prints the key into the transcript. To replace a key, overwrite it with the `printf` above; to read it, use `$(cat ~/.jifchat_key)`.
 3. Optional: `export JIFCHAT_BASE_URL=https://staging.jif.dev`. Default is `https://chat.jif.dev`.
 
 > OAuth sign-in (authorize in the browser, no key copy-paste) is planned. Until then, setup is the manual key above.
@@ -88,7 +88,11 @@ curl -s -X POST "$B/api/v1/canvas/files/images" \
 
 201 returns `{ success, url, filepath, filename, type }`. Put that `url` on an upload node (`imageUpload` uses `data.imageUrl` or `data.mediaUrl`; `videoUpload` and `audioUpload` use `data.mediaUrl`). The stored URL must be https Firebase Storage or fal media. Anything else is 400. Upload URLs can be reused on a new project.
 
+The server may downscale a large upload (the image strategy caps the long side at 2000px). The `width` / `height` in the 201 response are the stored dimensions — treat them as authoritative and pass those when you place the file, not the numbers you measured locally.
+
 Checks, each a 400: kind, then `file_id` (a UUID if you send one; omit it and one is generated), then mime, then size, then width and height for images. Images: jpeg, gif, png, webp, up to 30 MB (HEIC/HEIF is rejected). Videos: mp4, quicktime, webm, x-m4v, ogg, up to 200 MB. Audio: mpeg, mp3, wav, x-wav, ogg, webm, aac, flac, mp4, up to 15 MB. An image whose bytes cannot be decoded is 400 and nothing is stored. A third upload while two are in flight is 429. Videos or audio on a file strategy with no upload handler is 501.
+
+When you need a product packshot and the brand site blocks automated fetches (403 / bot wall), pull the archived image from the Wayback Machine using its `id_` raw form (`https://web.archive.org/web/<timestamp>id_/<original-url>`), which returns the original bytes rather than the viewer page. If that fails, ask the user for the file. Never invent a product URL.
 
 If `POST /files/audio` is 400 or 501, upload that file with `POST /files/videos` and place the URL on an `audioUpload` node (`audio-out` → `audio-in-0`). Audio alone is not a Seedance reference. If the upload still fails, ask the user to upload on the canvas or pass an https Firebase or fal URL. Do not invent a host or a URL.
 
@@ -144,7 +148,9 @@ One rule, not a menu. `seedance-2.0-i2v` and `kling-v3` in `references/ugc-refer
 - `gpt-image` uses `quality` (`low`, `medium`, `high`) and size presets (`image_size`: `auto`, `square_hd`, `square`, `portrait_4_3`, `portrait_16_9`, `landscape_4_3`, `landscape_16_9`). It does not take 1K/2K/4K. `references/character-consistency.md` overrides the cheap default for a repeated character: sheet and keyframes use `gpt-image` at quality `high`.
 - Image edit with reference stills: run model `${model}/edit` plus `image_urls`. Do not store `/edit` on the node.
 
-Quote cost from `GET /api/v1/canvas/models`. If `models` has an entry for the model, use that table with duration and resolution. If `models` is empty, quote the flat `imageCreditCost` or `videoCreditCost` on that same response (a video quote is that flat amount, not a per-second rate). Snapshot `GET /balance` before and after every run. A failed Seedance run with `creditCost: 0` is an unverified charge. Do not guess a price.
+Quote cost from `GET /api/v1/canvas/models` **on the host that will run the job** — re-fetch it there, never reuse a quote from another host. If `models` has an entry for the model, use that table with duration and resolution. If `models` is empty, quote the flat `imageCreditCost` (a 4K image run is `imageCreditCost4K`) or `videoCreditCost` on that same response (a video quote is that flat amount, not a per-second rate). If you cannot reach `/models`, say "price unknown" — never quote from memory or from the reference board.
+
+A run that fails at the provider is **never charged**: its record reads `creditCost: 0`, so there is nothing to refund. Snapshot `GET /balance` before and after every run and confirm spend on the balance, not on the run row. If the balance moved for a run that reads `failed`, that is the save-race bug below — report it, do not blindly re-run.
 
 ```bash
 curl -s "$B/api/v1/canvas/models" -H "Authorization: Bearer $K"
@@ -176,7 +182,9 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-node" \
 curl -s -X DELETE "$B/api/v1/canvas/projects/$PID" -H "Authorization: Bearer $K"
 ```
 
-- **Yes:** reply that it started, with the link and a rough ETA, then run upstream first (a keyframe image before the video that uses it). Pass `image_url` and `end_image_url` for `seedance-2.5-i2v`, or `image_urls` for `seedance-2.5`.
+- **Yes:** reply that it started, with the link and a rough ETA, then run upstream first (a keyframe image before the video that uses it).
+- Before generating keyframe stills, add up what the whole job will cost (every still plus every video) and check it against `GET /balance`. Stills for a video that the balance cannot pay for are wasted spend.
+- Pass `image_url` and `end_image_url` for `seedance-2.5-i2v`, or `image_urls` for `seedance-2.5`.
 
 ```bash
 curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-video-node" \
@@ -184,7 +192,8 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/run-video-node" \
   -d '{"nodeId":"vid-1","model":"seedance-2.5-i2v","parameters":{"prompt":"<same directing line as data.prompt>","image_url":"<start url>","end_image_url":"<end url>","duration":5,"aspect_ratio":"9:16","resolution":"720p"}}'
 ```
 
-- **Poll** `GET /projects/:id` about every 10–15 seconds and read the run whose `responseUrl` matches. Do not poll `check-run`: while a finished video is being saved, a `check-run` call starts a second poller that marks the run `failed` (`Invalid file source`) even though the video was made and charged. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. At most 3 video runs in flight. On the error `Too many concurrent canvas runs`, wait. Do not change the server cap.
+- Expect roughly 5–12 minutes per video clip when running serially. Poll about every 10–15 seconds — not a tight loop, and do not treat a slow run as a failure.
+- **Poll** `GET /projects/:id` about every 10–15 seconds and read the run whose `responseUrl` matches. Do not poll `check-run`: while a finished video is being saved, a `check-run` call starts a second poller that marks the run `failed` (`Invalid file source`) even though the video was in fact made. After about 8 minutes, stop and hand over the canvas link. The project stays; do not re-generate. Watch the server's own concurrency cap (`CANVAS_MAX_CONCURRENT_RUNS`, 5 by default): on `Too many concurrent canvas runs`, wait. Do not change the cap.
 
 ```bash
 curl -s "$B/api/v1/canvas/projects/$PID" -H "Authorization: Bearer $K" \
@@ -203,6 +212,7 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/check-run" \
 
 - **Finished:** send the file in chat and the canvas link.
 - **Error:** the reply includes the canvas link.
+- Running more than one job in parallel? Keep one state file per run (`$PID`, the `responseUrl`s, the balance snapshot) so the runs cannot overwrite each other's bookkeeping.
 - **Later edits** stay in that project. Do not create a new one for "make it slower" or a line change. `POST /nodes` will not overwrite the existing node; change duration or prompt on the run `parameters`, and keep `@Image1` on the video node's `data.prompt`.
 - If the canvas tab is open, tell the user to refresh before editing so autosave does not write the old graph back.
 
@@ -213,9 +223,24 @@ Same character, product, or location in 2+ shots: read `references/character-con
 - One character still, reused on every shot (same upload, wired to each shot).
 - The same character description in every video prompt.
 - The spoken line on that video node's `data.prompt`.
+- **Check the line** before moving on: transcribe the clip with a neutral pass, then a second pass biased toward the expected words. Digits and Latin words are the usual misses. Never trust a single pass.
 - Run shot 1 and wait before the rest.
 - Do not run a video on a keyframe that already looks wrong.
+- Chain the shots as keyframe n+1 from shot n's last frame: wire shot n's output still to `image-in-0` as the new `image_url`. One character still, reused on every shot, is the fallback for a hard cut.
+- Action beats need at least 2 seconds of screen time, and must not sit in the last second of a clip that carries a spoken line — the line needs that second.
 - After a multi-shot stitch, `POST /files/videos` and add a `videoUpload` node, then send the canvas link.
+
+Stitch the clips before uploading. Normalize each clip first, then concat without re-encoding:
+
+```bash
+for f in shot*.mp4; do
+  ffmpeg -y -i "$f" -c:v libx264 -crf 18 -video_track_timescale 30000 -c:a aac "norm_$f"
+done
+printf "file 'norm_shot1.mp4'\nfile 'norm_shot2.mp4'\n" > list.txt
+ffmpeg -y -f concat -safe 0 -i list.txt -c copy stitch.mp4
+```
+
+Keeping `-video_track_timescale 30000` on every clip is what makes the `-c copy` concat work.
 
 ## Demo 1 — one UGC shot
 
@@ -229,14 +254,15 @@ A new run of that shot uses `seedance-2.5-i2v` so the end still is kept. Wire `i
 |---|---|---|
 | 400 | bad model, handle, field, or URL; image missing width/height; PUT body contains `nodes` | read the error, fix once. A rejected PUT saved nothing |
 | 401 | missing/invalid key | re-check Setup and `JIFCHAT_BASE_URL` |
-| 402 | out of credits | tell the user to top up in Settings → Balance |
+| 402 | out of credits — the body carries `required` and `available` | report both, tell the user to top up in Settings → Balance. A 402 is refused before the provider is called, so nothing was generated and nothing was charged |
 | 404 | project or node missing, or not theirs | re-check `$PID` |
 | 409 | node already running, or edge slot taken | wait, or use a new `nodeId` / slot |
 | 429 | rate limited, or too many uploads in flight (default 2) | wait, retry once |
 | 501 | videos/audio upload not supported by the active file strategy | for audio, `POST /files/videos` and place the URL on an `audioUpload` node; otherwise ask the user to upload on the canvas or pass an https Firebase or fal URL |
 | 524 | gateway timeout on a run | do not re-run that `nodeId`. Read `runs[].outputUrl` from `GET /projects/:id` |
+| — | `run-*` hangs or returns an empty body | run every `run-*` call with `--max-time 300`. On a timeout or empty body, read `runs[]` first: a terminal run means the job did land — do not re-run it |
 
-`Invalid file source` on a video run is usually a false failure: the video was generated and charged, but the run was marked `failed` while saving. Do not retry right away. Compare `GET /balance` with the snapshot from before the run. If it dropped by the run cost, tell the user the video was likely saved to their JifChat files (file name contains `canvas_<nodeId>_`) and ask before re-running. If the balance did not drop, retry the same payload once.
+`Invalid file source` on a video run is a known false failure: the video was generated and saved, but the run was marked `failed` while saving. Do not retry right away. Compare `GET /balance` with the snapshot from before the run. If it dropped by the run cost, that charge landed on a run that reads `failed` — report it as a bug (a failed run must never be charged) and tell the user the video is in their JifChat files (the file name contains `canvas_<nodeId>_`). Ask before re-running. If the balance did not drop, retry the same payload once.
 
 `fetch failed`: retry the same payload up to 3 times before changing files or the project.
 
