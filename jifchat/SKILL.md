@@ -31,7 +31,7 @@ Templates are not available.
    install -m 600 /dev/null ~/.jifchat_key && printf '%s' 'jc_YOUR_KEY' > ~/.jifchat_key
    ```
    `~/.jifchat_key` is the only recommended location. Never patch that file with an edit tool — the diff prints the key into the transcript. To replace a key, overwrite it with the `printf` above; to read it, use `$(cat ~/.jifchat_key)`.
-3. Optional: `export JIFCHAT_BASE_URL=https://staging.jif.dev`. Default is `https://chat.jif.dev`.
+3. Optional: to run against a non-production environment you own, set `JIFCHAT_BASE_URL` to that environment's origin. Default is `https://chat.jif.dev`.
 
 > OAuth sign-in (authorize in the browser, no key copy-paste) is planned. Until then, setup is the manual key above.
 
