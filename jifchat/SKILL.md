@@ -1,6 +1,6 @@
 ---
 name: jifchat
-version: 2.1.0
+version: 2.2.0
 description: Generate images and videos on the user's JifChat infinite canvas (jif.dev). Use when the user asks to generate, create, or render an image, product shot, poster, or short video with JifChat, or says "/jifchat", "/generate image", "/generate video", or "make a similar UGC video". Results land in a JifChat canvas project and spend the user's JifChat credits.
 ---
 
@@ -114,6 +114,8 @@ Handles are 0-based.
 - End still: `image-out` → `lastframe-in` (video generators only)
 - Reference clips on reference-to-video: `video-out` → `video-in-0` .. `video-in-2`, `audio-out` → `audio-in-0` .. `audio-in-2`
 
+**Reference tokens.** Handle slots are 0-based, the prompt tokens are 1-based: `image-in-N` → `@Image{N+1}` (so `image-in-0` is `@Image1`), `video-in-N` → `@Video{N+1}` (`video-in-0` is `@Video1`), `audio-in-N` → `@Audio{N+1}` (`audio-in-0` is `@Audio1`). Cite references ONLY with those tokens, never with a node's display name (`Video Upload 1`, `影片上傳 1`, or any localized label) — display names never bind, and an upload node placed through this API has no name at all. The tokens bind in both `data.prompt` on the video node and the `parameters.prompt` of `run-video-node`; if you set both, send the identical text.
+
 **Layout.** Gap is 200. Next `x` = previous card width + 200. Widths: `textNode` 320, `imageUpload` 320, `videoUpload` 320, `audioUpload` 345, generators 736. A measured 9:16 video card is about 720×1280, so the next shot row is `y += 1480` (measured, not a layout constant). Explicit positions in the examples keep a 200px gap (text at 0, generator at 520).
 
 ```bash
@@ -138,12 +140,26 @@ post_edge '{"source":"end","sourceHandle":"image-out","target":"vid-1","targetHa
 
 Write image prompts on the text node and video prompts on `data.prompt` before `run-*`. Never send a probe `parameters.prompt` at a node whose text you still need. Run calls send `parameters` to the model. They do not read `data.prompt`. Provider keys are snake_case (`aspect_ratio`, `image_url`, `end_image_url`, `image_urls`, `image_size`). A `parameters.prompt` on `run-node` / `run-video-node` also creates or updates the upstream text node (it will not add a second text edge). For video, still put `@Image1` in `data.prompt`; copying `@` onto the text node does nothing.
 
+Reference-to-video with an image, a video and an audio reference (`seedance-2.5`, do not run until the user says yes — see Journey). The prompt cites all three with tokens:
+
+```bash
+post_node '{"nodeId":"ref-char","nodeType":"imageUpload","position":{"x":0,"y":0},"data":{"imageUrl":"<url from POST /files/images>"}}'
+post_node '{"nodeId":"ref-motion","nodeType":"videoUpload","position":{"x":0,"y":620},"data":{"mediaUrl":"<url from POST /files/videos>"}}'
+post_node '{"nodeId":"ref-song","nodeType":"audioUpload","position":{"x":0,"y":1240},"data":{"mediaUrl":"<url from POST /files/audio>"}}'
+post_node '{"nodeId":"vid-1","nodeType":"videoGenerator","position":{"x":520,"y":0},"data":{"model":"seedance-2.5","prompt":"Reference binding: @Image1 is the lead character, @Video1 is the motion and camera reference, @Audio1 is the music track. Follow @Video1 choreography and staging with @Image1 in frame throughout; keep the audio exactly @Audio1, no extra BGM, no subtitles. 0s-2s @Image1 enters left; 2s-4s the camera pushes in; 4s-5s hold on @Image1.","duration":"5","aspectRatio":"9:16","resolution":"720p","generateAudio":false}}'
+post_edge '{"source":"ref-char","sourceHandle":"image-out","target":"vid-1","targetHandle":"image-in-0"}'
+post_edge '{"source":"ref-motion","sourceHandle":"video-out","target":"vid-1","targetHandle":"video-in-0"}'
+post_edge '{"source":"ref-song","sourceHandle":"audio-out","target":"vid-1","targetHandle":"audio-in-0"}'
+```
+
+Then run it on `run-video-node` with the same URL arrays (`image_urls`, `video_urls`, `audio_urls`) and the identical text as `parameters.prompt`. `@Image1` binds to the image on `image-in-0`, `@Video1` to `video-in-0`, `@Audio1` to `audio-in-0`.
+
 ## Models
 
 One rule, not a menu. `seedance-2.0-i2v` and `kling-v3` in `references/ugc-reference-board.json` are the old export, not choices.
 
 - End still (`lastframe-in`): model id `seedance-2.5-i2v`. Start still is `image_url` (the image on `image-in-0`). End still is `end_image_url`. The bare id `seedance-2.5` is reference-to-video and does not forward an end frame.
-- Several reference images and no end lock: `seedance-2.5`, with those images in `image_urls`. Cite them as `@Image1`, `@Image2`, … in the video node's `data.prompt` (`image-in-0` is `@Image1`).
+- Several reference images and no end lock: `seedance-2.5`, with those images in `image_urls`. Cite them as `@Image1`, `@Image2`, … in the video node's `data.prompt` (`image-in-0` is `@Image1`). Reference video and audio go in `video_urls` / `audio_urls`, cited as `@Video1`, `@Audio1`, … (`video-in-0` is `@Video1`, `audio-in-0` is `@Audio1`).
 - Cheap default image: `nano-banana-pro`. `1K` / `2K` / `4K` is that model's `resolution` only.
 - `gpt-image` uses `quality` (`low`, `medium`, `high`) and size presets (`image_size`: `auto`, `square_hd`, `square`, `portrait_4_3`, `portrait_16_9`, `landscape_4_3`, `landscape_16_9`). It does not take 1K/2K/4K. `references/character-consistency.md` overrides the cheap default for a repeated character: sheet and keyframes use `gpt-image` at quality `high`.
 - Image edit with reference stills: run model `${model}/edit` plus `image_urls`. Do not store `/edit` on the node.
