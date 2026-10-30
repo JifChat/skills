@@ -35,62 +35,42 @@ jobs:
           done
           exit $fail
 
-      # 2. The reference board must stay valid JSON with the shape the skill
-      #    reads with jq (`.nodes[] | select(.id == $id)`), and must not leak a
-      #    real media URL. Sanitized uploads are the {{user-upload}} placeholder.
-      - name: Validate the reference board
+      # 2. references/ holds example data only. `one-shot.md` is the one
+      #    template; every `references/...` path the docs name must exist, and
+      #    no real media URL may leak (uploads are the {{user-upload}} placeholder).
+      - name: Validate references
         run: |
           python3 - <<'PY'
-          import json, sys, re
+          import os, re, subprocess, sys
 
-          path = 'skills/jifchat/references/ugc-reference-board.json'
-          with open(path) as fh:
-              board = json.load(fh)
+          root = 'skills/jifchat'
+          if not os.path.isfile(f'{root}/references/one-shot.md'):
+              sys.exit(f'{root}/references/one-shot.md (the one-shot template) is missing')
 
-          for key in ('nodes', 'edges'):
-              if key not in board:
-                  sys.exit(f'{path}: missing top-level "{key}"')
+          files = subprocess.run(['git', 'ls-files', '*.md', '*.json'],
+                                 capture_output=True, text=True, check=True).stdout.split()
+          errs = []
+          for f in files:
+              text = open(f, encoding='utf-8').read()
+              for ref in sorted(set(re.findall(r'references/[A-Za-z0-9_.-]+\.(?:md|json)', text))):
+                  if not os.path.isfile(f'{root}/{ref}'):
+                      errs.append(f'{f}: names {ref}, which does not exist')
 
-          if not board['nodes']:
-              sys.exit(f'{path}: no nodes')
-
-          bad = []
-          for node in board['nodes']:
-              if 'id' not in node or 'type' not in node:
-                  bad.append(node.get('id', '<no id>'))
-          if bad:
-              sys.exit(f'{path}: nodes missing id/type: {bad[:5]}')
-
-          # every field the one-shot jq recipe selects must exist on the node
-          # it names; a renamed node silently breaks the recipe.
-          shot = next(
-              (n for n in board['nodes']
-               if n.get('id') == 'videoGenerator-ztbYay5SDl8FN7N8RGnSm'),
-              None,
-          )
-          if shot is None:
-              sys.exit(f'{path}: the one-shot node referenced by one-shot.md is gone')
-
-          edges = [e for e in board['edges'] if e.get('target') == shot['id']]
-          if not edges:
-              sys.exit(f'{path}: the one-shot node has no incoming edges (one-shot.md)')
-
-          # no un-sanitized absolute media URL anywhere in the board
-          raw = open(path).read()
-          suspicious = re.findall(
-              r'https?://(?!web\.archive\.org)[^"\s]*\.(?:png|jpe?g|webp|mp4|mov|mp3|wav)',
-              raw,
-          )
-          if suspicious:
-              sys.exit(
-                  f'{path}: {len(suspicious)} un-sanitized media URL(s), '
-                  f'first: {suspicious[0][:80]}'
+          for f in subprocess.run(['git', 'ls-files', f'{root}/references'],
+                                  capture_output=True, text=True, check=True).stdout.split():
+              raw = open(f, encoding='utf-8').read()
+              suspicious = re.findall(
+                  r'https?://(?!web\.archive\.org)[^"\s]*\.(?:png|jpe?g|webp|mp4|mov|mp3|wav)',
+                  raw,
               )
+              if suspicious:
+                  errs.append(f'{f}: un-sanitized media URL, first: {suspicious[0][:80]}')
 
-          print(
-              f'board ok: {len(board["nodes"])} nodes, {len(board["edges"])} edges, '
-              f'one-shot node has {len(edges)} incoming edge(s)'
-          )
+          if errs:
+              for e in errs:
+                  print(f'::error::{e}')
+              sys.exit(1)
+          print(f'references ok: {len(files)} files checked')
           PY
 
       # 2b. No internal hosts anywhere in this repo. It is public, and the docs
