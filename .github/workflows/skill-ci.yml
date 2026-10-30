@@ -43,7 +43,7 @@ jobs:
           python3 - <<'PY'
           import json, sys, re
 
-          path = 'jifchat/references/ugc-reference-board.json'
+          path = 'skills/jifchat/references/ugc-reference-board.json'
           with open(path) as fh:
               board = json.load(fh)
 
@@ -115,7 +115,7 @@ jobs:
       #    server. Fail if SKILL.md grows a fenced API-schema block.
       - name: Skill stays thin (no inlined API schemas)
         run: |
-          f=jifchat/SKILL.md
+          f=skills/jifchat/SKILL.md
           if [ ! -f "$f" ]; then
             echo "::error::$f is missing"
             exit 1
@@ -125,15 +125,61 @@ jobs:
             echo "::error file=$f::expected Authorization examples to use \$K"
             exit 1
           fi
-          # frontmatter must carry a name and a version
-          head -5 "$f" | grep -q '^name: jifchat' \
-            || { echo "::error file=$f::frontmatter is missing 'name: jifchat'"; exit 1; }
-          head -5 "$f" | grep -qE '^version: [0-9]+\.[0-9]+\.[0-9]+' \
-            || { echo "::error file=$f::frontmatter is missing a version"; exit 1; }
+
+      # 3b. Frontmatter: parse the YAML (not fixed lines) and check the fields
+      #     the registries read. `version` lives in metadata.version (it is not
+      #     an Agent Skills spec field); Hermes reads
+      #     required_environment_variables only at the top level.
+      - name: Validate SKILL.md frontmatter
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --user --break-system-packages pyyaml
+          python3 - <<'PY'
+          import re, sys, yaml
+
+          path = 'skills/jifchat/SKILL.md'
+          text = open(path, encoding='utf-8').read()
+          m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
+          if not m:
+              sys.exit(f'{path}: no YAML frontmatter')
+          fm = yaml.safe_load(m.group(1))
+          errs = []
+
+          if fm.get('name') != 'jifchat':
+              errs.append("name must be 'jifchat'")
+          if not fm.get('description'):
+              errs.append('description is missing')
+          if 'version' in fm:
+              errs.append('top-level version is not allowed; use metadata.version')
+          if 'license' in fm:
+              errs.append('no license field (ClawHub publishes as MIT-0)')
+
+          meta = fm.get('metadata') or {}
+          ver = meta.get('version')
+          if not isinstance(ver, str) or not re.fullmatch(r'\d+\.\d+\.\d+', ver):
+              errs.append(f'metadata.version must be a quoted semver string, got {ver!r}')
+
+          env = [e.get('name') for e in fm.get('required_environment_variables') or []]
+          if 'JIFCHAT_API_KEY' not in env:
+              errs.append('required_environment_variables must declare JIFCHAT_API_KEY')
+
+          oc = meta.get('openclaw') or {}
+          if oc.get('primaryEnv') != 'JIFCHAT_API_KEY':
+              errs.append('metadata.openclaw.primaryEnv must be JIFCHAT_API_KEY')
+          bins = set((oc.get('requires') or {}).get('bins') or [])
+          if not {'curl', 'jq'} <= bins:
+              errs.append('metadata.openclaw.requires.bins must include curl and jq')
+
+          if errs:
+              for e in errs:
+                  print(f'::error file={path}::{e}')
+              sys.exit(1)
+          print(f'frontmatter ok: {fm["name"]} {ver}')
+          PY
 
       # 4. Drift guard (opt-in): this repo is the canonical copy of the skill.
       #    Jif-Chat ships docs/agents/skill.md as a deploy-time copy of
-      #    jifchat/SKILL.md, synced at merge time — never hand-edited there.
+      #    skills/jifchat/SKILL.md, synced at merge time — never hand-edited there.
       #
       #    The two are allowed to differ ONLY until the copy lands, and the
       #    copy is refreshed by copying this file verbatim. So the guard is
@@ -152,7 +198,7 @@ jobs:
           missing=0
           while IFS= read -r line; do
             [ -z "$line" ] && continue
-            if ! grep -Fqx -- "$line" jifchat/SKILL.md; then
+            if ! grep -Fqx -- "$line" skills/jifchat/SKILL.md; then
               echo "::error file=$f::line present in the copy but not in the canonical skill: $line"
               missing=1
             fi

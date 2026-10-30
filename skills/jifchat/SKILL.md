@@ -1,7 +1,27 @@
 ---
 name: jifchat
-version: 2.2.0
 description: Generate images and videos on the user's JifChat infinite canvas (jif.dev). Use when the user asks to generate, create, or render an image, product shot, poster, or short video with JifChat, or says "/jifchat", "/generate image", "/generate video", or "make a similar UGC video". Results land in a JifChat canvas project and spend the user's JifChat credits.
+required_environment_variables:
+  - name: JIFCHAT_API_KEY
+    prompt: "JifChat API key (jc_...)"
+    help: "JifChat → Settings → Balance → API Keys → Create"
+    required_for: "Every JifChat Canvas API call (create projects, upload, generate)"
+metadata:
+  author: JifChat
+  version: "1.0.0"
+  openclaw:
+    primaryEnv: JIFCHAT_API_KEY
+    envVars:
+      - name: JIFCHAT_API_KEY
+        required: true
+        description: "JifChat API key (jc_...). Falls back to ~/.jifchat_key when unset."
+      - name: JIFCHAT_BASE_URL
+        required: false
+        description: "Optional JifChat origin override. Default https://chat.jif.dev."
+    requires:
+      bins:
+        - curl
+        - jq
 ---
 
 # JifChat
@@ -26,12 +46,16 @@ Templates are not available.
 ## Setup
 
 1. Sign in to JifChat → **Settings → Balance → API Keys** → **Create**. Copy the `jc_...` key — it is shown once.
-2. Save it where this skill can read it:
+2. Recommended: provide it as the `JIFCHAT_API_KEY` environment variable. Agents that manage skill secrets (OpenClaw, Hermes) prompt for it and inject it; otherwise export it in the shell profile the agent uses.
+3. Fallback: if `JIFCHAT_API_KEY` is not set, the skill reads `~/.jifchat_key`. Existing setups that use this file keep working. To create it:
    ```bash
    install -m 600 /dev/null ~/.jifchat_key && printf '%s' 'jc_YOUR_KEY' > ~/.jifchat_key
    ```
-   `~/.jifchat_key` is the only recommended location. Never patch that file with an edit tool — the diff prints the key into the transcript. To replace a key, overwrite it with the `printf` above; to read it, use `$(cat ~/.jifchat_key)`.
-3. Optional: to run against a non-production environment you own, set `JIFCHAT_BASE_URL` to that environment's origin. Default is `https://chat.jif.dev`.
+   Keep the file at mode 600. Never patch that file with an edit tool — the diff prints the key into the transcript. To replace a key, overwrite it with the `printf` above.
+4. The key resolves in this order: `JIFCHAT_API_KEY`, then `~/.jifchat_key`. Never print either.
+5. Optional: to run against a non-production environment you own, set `JIFCHAT_BASE_URL` to that environment's origin. Default is `https://chat.jif.dev`.
+
+Requires `curl` and `jq`. `ffmpeg` is optional — only the multi-shot stitch step uses it.
 
 > OAuth sign-in (authorize in the browser, no key copy-paste) is planned. Until then, setup is the manual key above.
 
@@ -43,7 +67,7 @@ Start every shell session with:
 
 ```bash
 B=${JIFCHAT_BASE_URL:-https://chat.jif.dev}
-K=${JIFCHAT_API_KEY:-$(cat ~/.jifchat_key 2>/dev/null)}
+K=${JIFCHAT_API_KEY:-$(cat ~/.jifchat_key 2>/dev/null)}  # env var first, then the file
 [ -n "$K" ] || echo "No JifChat key — see Setup"
 ```
 
@@ -246,7 +270,7 @@ Same character, product, or location in 2+ shots: read `references/character-con
 - Action beats need at least 2 seconds of screen time, and must not sit in the last second of a clip that carries a spoken line — the line needs that second.
 - After a multi-shot stitch, `POST /files/videos` and add a `videoUpload` node, then send the canvas link.
 
-Stitch the clips before uploading. Normalize each clip first, then concat without re-encoding:
+Stitch the clips before uploading (needs `ffmpeg`, which is optional for every other step). Normalize each clip first, then concat without re-encoding:
 
 ```bash
 for f in shot*.mp4; do
