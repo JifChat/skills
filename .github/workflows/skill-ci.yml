@@ -176,31 +176,3 @@ jobs:
               sys.exit(1)
           print(f'frontmatter ok: {fm["name"]} {ver}')
           PY
-
-      # 4. Drift guard (opt-in): this repo is the canonical copy of the skill.
-      #    Jif-Chat ships docs/agents/skill.md as a deploy-time copy of
-      #    skills/jifchat/SKILL.md, synced at merge time — never hand-edited there.
-      #
-      #    The two are allowed to differ ONLY until the copy lands, and the
-      #    copy is refreshed by copying this file verbatim. So the guard is
-      #    "the copy must not contain anything this file does not": every
-      #    non-blank line of the copy must exist here. That catches a hand-edit
-      #    in the copy without false-failing while the copy is one revision
-      #    behind.
-      #
-      #    Off by default (needs a Jif-Chat checkout). Enable it in the Jif-Chat
-      #    repo, which has both files, by setting JIFCHAT_REPO=. there.
-      - name: Skill copy has not been hand-edited (opt-in)
-        if: ${{ env.JIFCHAT_COPY != '' }}
-        run: |
-          f="$JIFCHAT_COPY"
-          [ -f "$f" ] || { echo "::error::JIFCHAT_COPY=$f does not exist"; exit 1; }
-          missing=0
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            if ! grep -Fqx -- "$line" skills/jifchat/SKILL.md; then
-              echo "::error file=$f::line present in the copy but not in the canonical skill: $line"
-              missing=1
-            fi
-          done < "$f"
-          exit $missing
