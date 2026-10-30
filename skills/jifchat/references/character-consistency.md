@@ -1,7 +1,7 @@
 # Character consistency
 
 Use these rules whenever the same character, product, or location appears in 2+ shots.
-They come from the Kate reference board (`ugc-reference-board.json`).
+They come from the Kate reference board.
 
 **Lock the look in images, not in video.** Every shot is decided as a still first.
 The video model only animates stills; it never invents a character.
