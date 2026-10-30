@@ -13,7 +13,7 @@ metadata:
     primaryEnv: JIFCHAT_API_KEY
     envVars:
       - name: JIFCHAT_API_KEY
-        required: true
+        required: false
         description: "JifChat API key (jc_...). Falls back to ~/.jifchat_key when unset."
       - name: JIFCHAT_BASE_URL
         required: false
