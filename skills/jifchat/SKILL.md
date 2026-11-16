@@ -8,7 +8,7 @@ required_environment_variables:
     required_for: "Every JifChat Canvas API call (create projects, upload, generate)"
 metadata:
   author: JifChat
-  version: "1.0.1"
+  version: "1.1.0"
   openclaw:
     primaryEnv: JIFCHAT_API_KEY
     envVars:
@@ -36,6 +36,7 @@ Default base URL is `https://chat.jif.dev`. Override only with `JIFCHAT_BASE_URL
 - Create canvas projects and generate images and videos in them
 - Upload image, video, and audio files, then place them on the canvas
 - Build a graph with `POST /nodes` and `POST /edges` (text prompts, uploads, generators) and lay it out with `position`
+- Edit existing nodes (`PATCH /nodes/:nodeId`), remove nodes (`DELETE /nodes/:nodeId`), and remove/rewire edges (`DELETE /edges/:edgeId` + `POST /edges`)
 
 **Can't**
 - Touch projects shared with the user (owner-only; others return 404)
@@ -94,13 +95,16 @@ Production mounts the canvas key routes under `/api/v1/canvas`. Use these; do no
 - `POST /projects` and `GET /projects` — create (`{"title":"..."}` → `_id`) and list
 - `GET /projects/:id`, `PUT /projects/:id`, `DELETE /projects/:id`, `POST /projects/:id/copy`
 - `POST /projects/:id/nodes` — add one node
+- `PATCH /projects/:id/nodes/:nodeId` — edit an existing node's `position` and/or allowlisted `data`
+- `DELETE /projects/:id/nodes/:nodeId` — remove a node and its incident edges
 - `POST /projects/:id/edges` — connect two nodes
+- `DELETE /projects/:id/edges/:edgeId` — remove one edge
 - `POST /files/{kind}` — upload (`kind` is `images`, `videos`, or `audio`)
 - `POST /projects/:id/run-node`, `POST /projects/:id/run-video-node`, `POST /projects/:id/run-text-node`, `POST /projects/:id/check-run`
 - `GET /models`, `GET /balance`
 - `GET/POST /groups` — team-scoped project groups
 
-`PUT /projects/:id` updates the title and other project fields. A body that contains `nodes` is a 400, and nothing in that body is written. Build the graph with `POST /nodes` and `POST /edges`.
+`PUT /projects/:id` updates `title` and whole-array `edges` only. A body that contains `nodes` is a 400, and nothing in that body is written. Use `POST /nodes` to add nodes, `PATCH /nodes/:nodeId` and `DELETE /nodes/:nodeId` to edit or remove them, and `POST /edges` / `DELETE /edges/:edgeId` to connect or rewire edges.
 
 `position` is optional on `POST /nodes` and on the run routes. If it is omitted the server places the node at the previous node's x + that node's layout width + 200, same y. Widths: `textNode` 320, `imageUpload` 320, `videoUpload` 320, `audioUpload` 345, generators 736. A measured 9:16 video card is about 720×1280, so the next shot row is `y += 1480` (measured, not a layout constant). **Always send `position` anyway.** Explicit positions keep a 200px gap (text at 0, generator at 520).
 
@@ -128,14 +132,16 @@ If `POST /files/audio` is 400 or 501, upload that file with `POST /files/videos`
 
 ## Nodes, edges, layout
 
-**Node body** — `{ nodeId, nodeType, position, data }`. `nodeId` is a non-empty string, at most 256 characters. `nodeType` is `textNode`, `imageUpload`, `videoUpload`, `audioUpload`, `imageGenerator`, `textGenerator`, or `videoGenerator`. Existing nodes are never overwritten.
+**Node body** — `{ nodeId, nodeType, position, data }`. `nodeId` is a non-empty string, at most 256 characters. `nodeType` is `textNode`, `imageUpload`, `videoUpload`, `audioUpload`, `imageGenerator`, `textGenerator`, or `videoGenerator`. `POST /nodes` is create-only and never overwrites an existing node.
+
+To edit an existing node, call `PATCH /projects/:id/nodes/:nodeId` with `{ position?, data? }` (send only editable fields for that node type — never send server-seeded fields like `status` or `resultImage`, which return `400`). To remove a node and its incident edges, call `DELETE /projects/:id/nodes/:nodeId` (`409` if a run on that node is currently `running`).
 
 - `textNode`: `data.text` (clamped to 8000 characters). This is how an **image** generator gets its prompt.
 - `imageGenerator` / `videoGenerator`: `data.model`, plus stored settings in camelCase (`resolution`, `aspectRatio`, `duration`, `quality`, `imageSize`, `generateAudio`). The server seeds `status` and the result fields. Do not send those.
 - An image generator's prompt is a `textNode` wired `text-out` → `text-in`. The canvas Run button stays disabled without that edge.
 - Video `@Image1` lives in the video node's `data.prompt`. `@` in a connected text node does nothing. The spoken line for that shot goes on that same `data.prompt`.
 
-**Edge body** — `{ source, sourceHandle, target, targetHandle }`. The API builds the edge id and stroke. One edge per target slot. Text fan-in is one (`409` if the slot is taken).
+**Edge body** — `{ source, sourceHandle, target, targetHandle }`. The API builds the edge id and stroke. One edge per target slot. Text fan-in is one (`409` if the slot is taken). To replace or remove an existing wire, read its `id` from `GET /projects/:id`, call `DELETE /projects/:id/edges/:edgeId`, then call `POST /projects/:id/edges` for the new wire.
 
 Handles are 0-based.
 
@@ -150,12 +156,17 @@ Handles are 0-based.
 
 ```bash
 post_node() { curl -s -X POST "$B/api/v1/canvas/projects/$PID/nodes" -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d "$1"; }
+patch_node() { curl -s -X PATCH "$B/api/v1/canvas/projects/$PID/nodes/$1" -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d "$2"; }
 post_edge() { curl -s -X POST "$B/api/v1/canvas/projects/$PID/edges" -H "Authorization: Bearer $K" -H 'Content-Type: application/json' -d "$1"; }
+delete_edge() { curl -s -X DELETE "$B/api/v1/canvas/projects/$PID/edges/$1" -H "Authorization: Bearer $K"; }
 
 # image: text card, then the generator 200px to its right (320 + 200 = 520)
 post_node '{"nodeId":"prompt-1","nodeType":"textNode","position":{"x":0,"y":0},"data":{"text":"a shiba inu on a surfboard, watercolor"}}'
 post_node '{"nodeId":"img-1","nodeType":"imageGenerator","position":{"x":520,"y":0},"data":{"model":"nano-banana-pro","resolution":"1K","aspectRatio":"1:1"}}'
 post_edge '{"source":"prompt-1","sourceHandle":"text-out","target":"img-1","targetHandle":"text-in"}'
+
+# edit that prompt later without creating a duplicate node:
+patch_node "prompt-1" '{"data":{"text":"a shiba inu on a surfboard, oil painting"}}'
 ```
 
 End-still video (start on `image-in-0`, end on `lastframe-in`). Do not run it until the user says yes — see Journey.
@@ -259,7 +270,7 @@ curl -s -X POST "$B/api/v1/canvas/projects/$PID/check-run" \
 - **Finished:** send the file in chat and the canvas link.
 - **Error:** the reply includes the canvas link.
 - Running more than one job in parallel? Keep one state file per run (`$PID`, the `responseUrl`s, the balance snapshot) so the runs cannot overwrite each other's bookkeeping.
-- **Later edits** stay in that project. Do not create a new one for "make it slower" or a line change. `POST /nodes` will not overwrite the existing node; change duration or prompt on the run `parameters`, and keep `@Image1` on the video node's `data.prompt`.
+- **Later edits** stay in that project. Do not create a new one for "make it slower", a line change, or swapping a reference. Update the existing node via `PATCH /nodes/:nodeId` (for `textNode.data.text`, `videoGenerator.data.prompt`, `duration`, `aspectRatio`, `mediaUrl`, or `position`) and rewire connections via `DELETE /edges/:edgeId` + `POST /edges`, then re-run with matching `parameters` (keeping `@Image1` on the video node's `data.prompt`).
 - If the canvas tab is open, tell the user to refresh before editing so autosave does not write the old graph back.
 
 ### Multi-shot
@@ -301,8 +312,8 @@ A new run of that shot uses `seedance-2.5-i2v` so the end still is kept. Wire `i
 | 400 | bad model, handle, field, or URL; image missing width/height; PUT body contains `nodes` | read the error, fix once. A rejected PUT saved nothing |
 | 401 | missing/invalid key | re-check Setup and `JIFCHAT_BASE_URL` |
 | 402 | out of credits — the body carries `required` and `available` | report both, tell the user to top up in Settings → Balance. A 402 is refused before the provider is called, so nothing was generated and nothing was charged |
-| 404 | project or node missing, or not theirs | re-check `$PID` |
-| 409 | node already running, or edge slot taken | wait, or use a new `nodeId` / slot |
+| 404 | project, node, or edge missing, or not theirs | re-check `$PID` and the node/edge id |
+| 409 | node already running (or cannot delete while running), or edge slot taken | wait, or remove/replace the existing wire with `DELETE /edges/:edgeId` |
 | 429 | rate limited, or too many uploads in flight (default 2) | wait, retry an upload or read once. For a `run-*` call, ask before running it again |
 | 501 | videos/audio upload not supported by the active file strategy | for audio, `POST /files/videos` and place the URL on an `audioUpload` node; otherwise ask the user to upload on the canvas or pass an https Firebase or fal URL |
 | 524 | gateway timeout on a run | do not re-run that `nodeId`. Read `runs[].outputUrl` from `GET /projects/:id` |
