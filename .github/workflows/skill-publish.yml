@@ -1,0 +1,92 @@
+name: Publish skill to ClawHub
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'skills/jifchat/**'
+  workflow_dispatch:
+
+concurrency:
+  group: clawhub-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'JifChat/skills'
+    name: publish to clawhub
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install ClawHub CLI & PyYAML
+        run: |
+          npm install -g clawhub@0.26.0
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --user --break-system-packages pyyaml
+
+      - name: Authenticate ClawHub
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+        run: |
+          if [ -z "$CLAWHUB_TOKEN" ]; then
+            echo "::error::CLAWHUB_TOKEN repository secret is not set"
+            exit 1
+          fi
+          clawhub login --token "$CLAWHUB_TOKEN" --no-browser
+
+      - name: Publish skill if metadata.version is new
+        run: |
+          VER=$(python3 - <<'PY'
+          import re, sys, yaml
+
+          text = open('skills/jifchat/SKILL.md', encoding='utf-8').read()
+          m = re.match(r'^---\n(.*?)\n---\n', text, re.S)
+          if not m:
+              sys.exit('skills/jifchat/SKILL.md: missing YAML frontmatter')
+          fm = yaml.safe_load(m.group(1))
+          ver = (fm.get('metadata') or {}).get('version')
+          if not isinstance(ver, str) or not re.fullmatch(r'\d+\.\d+\.\d+', ver):
+              sys.exit(f'Invalid metadata.version: {ver!r}')
+          print(ver)
+          PY
+          )
+
+          ALREADY_PUBLISHED=$(clawhub inspect "@jifchat/jifchat" --versions --json 2>/dev/null \
+            | VER="$VER" node -e "
+              const fs = require('fs');
+              const raw = fs.readFileSync(0, 'utf8').trim();
+              if (!raw) process.exit(0);
+              const start = raw.indexOf('{');
+              if (start < 0) process.exit(0);
+              const data = JSON.parse(raw.slice(start));
+              const ver = process.env.VER;
+              const versions = (data.versions || []).map((v) => v.version);
+              if (data.latestVersion?.version === ver || versions.includes(ver)) {
+                process.stdout.write('yes');
+              }
+            " || true)
+
+          if [ "$ALREADY_PUBLISHED" = "yes" ]; then
+            echo "jifchat@$VER is already published on ClawHub; skipping."
+            exit 0
+          fi
+
+          CHANGELOG=$(git log -1 --pretty=%s)
+          clawhub skill publish ./skills/jifchat \
+            --slug jifchat \
+            --owner jifchat \
+            --version "$VER" \
+            --changelog "$CHANGELOG" \
+            --source-repo "$GITHUB_REPOSITORY" \
+            --source-commit "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF_NAME" \
+            --source-path skills/jifchat
